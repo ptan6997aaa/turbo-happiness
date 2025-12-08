@@ -3,3 +3,5 @@ pandas
 plotly
 dash_bootstrap_components
 openpyxl
+altair 
+dash_vega_components 
