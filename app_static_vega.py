@@ -15,7 +15,7 @@ df_dimSub = pd.read_excel("DimSubjects.xlsx", sheet_name="DimSubjects")
 df = pd.merge(df_fact, df_dimStu[["StudentID", "GradeLevel"]], on="StudentID", how="left")
 df = pd.merge(df, df_dimSub[["SubjectID", "SubjectName"]], on="SubjectID", how="left")
 df_dimCal["YearQuarterConcat"] = df_dimCal["Year"].astype(str) + " Q" + df_dimCal["QuarterNumber"].astype(str)
-df = pd.merge(df, df_dimCal[["DateKey", "YearQuarterConcat"]], on="DateKey", how="left")  # ✅ 已修正拼写
+df = pd.merge(df, df_dimCal[["DateKey", "YearQuarterConcat"]], on="DateKey", how="left") 
 
 # 衍生字段
 df["PassedScore"] = df["Score"].apply(lambda x: "Pass" if x >= 55 else "Fail")
