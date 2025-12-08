@@ -253,9 +253,9 @@ def update_visuals(sel_grade, sel_subj, sel_assess):
           "$schema": "https://vega.github.io/schema/vega/v6.json",
           "description": "Bar chart with average line for Subject Scores",
           "background": "white",
-          "padding": 0,
+          "padding": 10,
           "width": 650, 
-          "height": 220, 
+          "height": 350, 
           "autosize": {"type": "fit", "contains": "padding"}, 
           "title": {
             "text": "Subject Performance",
