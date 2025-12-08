@@ -405,4 +405,4 @@ def update_ui(selected_grade, selected_level, selected_time, selected_subject, v
 # │ 4. ENTRY POINT                                                               │
 # └──────────────────────────────────────────────────────────────────────────────┘
 if __name__ == "__main__":
-    app.run_server(debug=True)
+    app.run(debug=True)
