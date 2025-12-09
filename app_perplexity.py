@@ -15,7 +15,7 @@ df_dimSub = pd.read_excel("DimSubjects.xlsx", sheet_name="DimSubjects")
 df = pd.merge(df_fact, df_dimStu[["StudentID", "GradeLevel"]], on="StudentID", how="left")
 df = pd.merge(df, df_dimSub[["SubjectID", "SubjectName"]], on="SubjectID", how="left")
 
-# 构造 YearQuarterConcat 为 "2022-Q1" 格式（避免与 YearMonth 混淆）
+# 构造时间标签 
 df_dimCal["YearQuarterConcat"] = df_dimCal["Year"].astype(str) + "-Q" + df_dimCal["QuarterNumber"].astype(str)
 df_dimCal["YearMonthConcat"] = df_dimCal["Year"].astype(str) + "-" + df_dimCal["Month"].apply(lambda x: f"{x:02d}")
 df = pd.merge(df, df_dimCal[["DateKey", "YearQuarterConcat", "YearMonthConcat"]], on="DateKey", how="left")
@@ -452,21 +452,37 @@ def build_bar_quarter(df_in, selected_quarter=None):
     if df_in.empty or 'YearQuarterConcat' not in df_in.columns:
         return {
             "$schema": "https://vega.github.io/schema/vega/v6.json",
-            "marks": [{"type": "text", "encode": {"update": {"text": {"value": "No Data"}, "x": {"value": 100}, "y": {"value": 100}}}}]
+            "marks": [{
+                "type": "text",
+                "encode": {
+                    "update": {
+                        "text": {"value": "No Data"},
+                        "x": {"value": 100},
+                        "y": {"value": 100}
+                    }
+                }
+            }]
         }
 
+    # 聚合：每个季度平均分
     agg_quarter = df_in.groupby('YearQuarterConcat')['Score'].mean().reset_index()
     agg_quarter.rename(columns={'Score': 'Average of Score'}, inplace=True)
+
+    # 全局平均分（忽略 Quarter 筛选，但尊重其它筛选）
     global_mean = df_in['Score'].mean()
     agg_quarter['MeanScore'] = global_mean
-    agg_quarter['MinScore'] = agg_quarter['Average of Score'].min()
-    agg_quarter['YAxisBaseline'] = agg_quarter['MinScore'] - 5
+
+    # 用所有季度的最小平均分作为统一 baseline
+    min_score = agg_quarter['Average of Score'].min()
+    agg_quarter['MinScore'] = min_score
+    agg_quarter['YAxisBaseline'] = min_score - 5
+
     data_values = agg_quarter.to_dict(orient='records')
     current_selection = selected_quarter if selected_quarter != "All" else None
 
     vega_spec = {
         "$schema": "https://vega.github.io/schema/vega/v6.json",
-        "description": "Bar chart with average line for Quarterly Scores",
+        "description": "Quarterly bar chart with global average line and timeline axis",
         "background": "white",
         "padding": 10,
         "width": 650,
@@ -482,30 +498,86 @@ def build_bar_quarter(df_in, selected_quarter=None):
             "offset": 20
         },
         "style": "cell",
+
         "data": [
             {"name": "dataset", "values": data_values},
+
+            # data_0: 携带 MeanScore / MinScore / YAxisBaseline
             {
                 "name": "data_0",
                 "source": "dataset",
                 "transform": [
-                    {"type": "formula", "expr": "datum['MinScore'] - 5", "as": "YAxisBaseline"}
+                    {
+                        "type": "joinaggregate",
+                        "as": ["MeanScore", "MinScore"],
+                        "ops": ["mean", "min"],
+                        "fields": ["Average of Score", "Average of Score"]
+                    },
+                    {
+                        "type": "formula",
+                        "expr": "datum.MinScore - 5",
+                        "as": "YAxisBaseline"
+                    }
                 ]
             },
+
+            # data_1: 有效记录 + 生成 QuarterLabel / YearLabel
             {
                 "name": "data_1",
                 "source": "data_0",
-                "transform": [{"type": "filter", "expr": "isValid(datum['Average of Score']) && isFinite(+datum['Average of Score'])"}]
+                "transform": [
+                    {
+                        "type": "filter",
+                        "expr": "isValid(datum['Average of Score']) && isFinite(+datum['Average of Score'])"
+                    },
+                    # 从 YearQuarterConcat（如 2022-Q1）拆出 QuarterLabel = Q1
+                    {
+                        "type": "formula",
+                        "as": "QuarterLabel",
+                        "expr": "split(datum.YearQuarterConcat, '-')[1]"
+                    },
+                    # YearLabel = 2022
+                    {
+                        "type": "formula",
+                        "as": "YearLabel",
+                        "expr": "split(datum.YearQuarterConcat, '-')[0]"
+                    }
+                ]
             },
-            {"name": "data_3", "source": "data_0"},
+
+            # data_3: 用于画平均线
+            {
+                "name": "data_3",
+                "source": "data_0",
+                "transform": [
+                    {
+                        "type": "filter",
+                        "expr": "isValid(datum['MeanScore']) && isFinite(+datum['MeanScore'])"
+                    }
+                ]
+            },
+
+            # data_4: 取一条记录用来画平均线文字
             {
                 "name": "data_4",
                 "source": "data_0",
                 "transform": [
-                    {"type": "window", "as": ["rowNum"], "ops": ["row_number"], "fields": [None], "sort": {"field": [], "order": []}},
-                    {"type": "filter", "expr": "datum.rowNum === 1"}
+                    {
+                        "type": "window",
+                        "as": ["rowNum"],
+                        "ops": ["row_number"],
+                        "fields": [None],
+                        "sort": {"field": [], "order": []}
+                    },
+                    {"type": "filter", "expr": "datum.rowNum === 1"},
+                    {
+                        "type": "filter",
+                        "expr": "isValid(datum['MeanScore']) && isFinite(+datum['MeanScore'])"
+                    }
                 ]
             }
         ],
+
         "signals": [
             {
                 "name": "hovered_quarter",
@@ -519,12 +591,17 @@ def build_bar_quarter(df_in, selected_quarter=None):
                 "name": "sel_quarter",
                 "value": current_selection,
                 "on": [
-                    {"events": "@layer_0_marks:click", "update": "datum['YearQuarterConcat'] === sel_quarter ? null : datum['YearQuarterConcat']"},
+                    {
+                        "events": "@layer_0_marks:click",
+                        "update": "datum['YearQuarterConcat'] === sel_quarter ? null : datum['YearQuarterConcat']"
+                    },
                     {"events": "dblclick", "update": "null"}
                 ]
             }
         ],
+
         "marks": [
+            # 柱子
             {
                 "name": "layer_0_marks",
                 "type": "rect",
@@ -541,11 +618,16 @@ def build_bar_quarter(df_in, selected_quarter=None):
                         ],
                         "fillOpacity": [
                             {"test": "hovered_quarter === datum['YearQuarterConcat']", "value": 1},
-                            {"test": "sel_quarter && datum['YearQuarterConcat'] !== sel_quarter", "value": 0.2},
+                            {
+                                "test": "sel_quarter && datum['YearQuarterConcat'] !== sel_quarter",
+                                "value": 0.2
+                            },
                             {"value": 0.8}
                         ],
                         "tooltip": {
-                            "signal": "{'Quarter': datum['YearQuarterConcat'], 'Avg Score': format(datum['Average of Score'], '.1f'), 'Overall Avg': format(datum['MeanScore'], '.1f')}"
+                            "signal": "{'Quarter': datum['YearQuarterConcat'], "
+                                      "'Avg Score': format(datum['Average of Score'], '.1f'), "
+                                      "'Overall Avg': format(datum['MeanScore'], '.1f')}"
                         },
                         "x": {"scale": "x", "field": "YearQuarterConcat", "band": 0.2},
                         "width": {"signal": "max(0.25, 0.6 * bandwidth('x'))"},
@@ -554,6 +636,8 @@ def build_bar_quarter(df_in, selected_quarter=None):
                     }
                 }
             },
+
+            # 平均线
             {
                 "name": "layer_2_marks",
                 "type": "rule",
@@ -569,6 +653,8 @@ def build_bar_quarter(df_in, selected_quarter=None):
                     }
                 }
             },
+
+            # 平均线文字
             {
                 "name": "layer_3_marks",
                 "type": "text",
@@ -587,8 +673,97 @@ def build_bar_quarter(df_in, selected_quarter=None):
                         "baseline": {"value": "middle"}
                     }
                 }
+            },
+
+            # --- Timeline 轴：季度文字（上排） ---
+            {
+                "type": "text",
+                "from": {"data": "data_1"},
+                "encode": {
+                    "enter": {
+                        "y": {"signal": "height + 12"},
+                        "align": {"value": "center"},
+                        "baseline": {"value": "middle"},
+                        "font": {"value": "Arial"},
+                        "fontWeight": {"value": "bold"},
+                        "fontSize": {"value": 10},
+                        "fill": {"value": "black"}
+                    },
+                    "update": {
+                        "x": {
+                            "scale": "x",
+                            "field": "YearQuarterConcat",
+                            "band": 0.5
+                        },
+                        "text": {"field": "QuarterLabel"}
+                    }
+                }
+            },
+
+            # --- Timeline 轴：年份文字（下排，只在 Q1 显示） ---
+            {
+                "type": "text",
+                "from": {"data": "data_1"},
+                "encode": {
+                    "enter": {
+                        "y": {"signal": "height + 35"},
+                        "align": {"value": "left"},
+                        "baseline": {"value": "middle"},
+                        "font": {"value": "Arial"},
+                        "fontWeight": {"value": "bold"},
+                        "fontSize": {"value": 14},
+                        "fill": {"value": "black"},
+                        "dx": {"value": 5}
+                    },
+                    "update": {
+                        "x": {
+                            "scale": "x",
+                            "field": "YearQuarterConcat",
+                            "band": 0
+                        },
+                        "text": {
+                            "signal": "datum.QuarterLabel == 'Q1' ? datum.YearLabel : ''"
+                        }
+                    }
+                }
+            },
+
+            # --- Timeline 轴：垂直分割线 ---
+            {
+                "type": "rule",
+                "from": {"data": "data_1"},
+                "encode": {
+                    "update": {
+                        "x": {
+                            "scale": "x",
+                            "field": "YearQuarterConcat",
+                            "band": 0
+                        },
+                        "y": {"signal": "height"},
+                        "y2": {
+                            "signal": "datum.QuarterLabel == 'Q1' ? height + 45 : height + 25"
+                        },
+                        "stroke": {"value": "#e0e0e0"},
+                        "strokeWidth": {"value": 1}
+                    }
+                }
+            },
+
+            # --- Timeline 轴：底部横线 ---
+            {
+                "type": "rule",
+                "encode": {
+                    "update": {
+                        "x": {"value": 0},
+                        "x2": {"signal": "width"},
+                        "y": {"signal": "height"},
+                        "stroke": {"value": "#ddd"},
+                        "strokeWidth": {"value": 1}
+                    }
+                }
             }
         ],
+
         "scales": [
             {
                 "name": "x",
@@ -596,7 +771,11 @@ def build_bar_quarter(df_in, selected_quarter=None):
                 "domain": {
                     "data": "data_1",
                     "field": "YearQuarterConcat",
-                    "sort": {"field": "YearQuarterConcat", "op": "min", "order": "ascending"}
+                    "sort": {
+                        "field": "YearQuarterConcat",
+                        "op": "min",
+                        "order": "ascending"
+                    }
                 },
                 "range": [0, {"signal": "width"}],
                 "paddingInner": 0.1,
@@ -609,7 +788,8 @@ def build_bar_quarter(df_in, selected_quarter=None):
                     "fields": [
                         {"data": "data_1", "field": "Average of Score"},
                         {"data": "data_1", "field": "YAxisBaseline"},
-                        {"data": "data_3", "field": "MeanScore"}
+                        {"data": "data_3", "field": "MeanScore"},
+                        {"data": "data_4", "field": "MeanScore"}
                     ]
                 },
                 "range": [{"signal": "height"}, 0],
@@ -617,7 +797,9 @@ def build_bar_quarter(df_in, selected_quarter=None):
                 "zero": False
             }
         ],
+
         "axes": [
+            # 左侧数值轴
             {
                 "scale": "y",
                 "orient": "left",
@@ -626,23 +808,29 @@ def build_bar_quarter(df_in, selected_quarter=None):
                 "gridOpacity": 0.5,
                 "tickCount": {"signal": "ceil(height/40)"},
                 "title": "Average Score",
+                "domain": False,
+                "ticks": False,
                 "zindex": 0
             },
+            # 底部 x 轴：只保留 tick 用于辅助分割线，标签隐藏
             {
                 "scale": "x",
                 "orient": "bottom",
-                "labels": False,
-                "ticks": False,
+                "grid": False,
                 "domain": False,
+                "labels": False,
                 "zindex": 0
             }
         ],
+
         "config": {
             "axis": {"labelFontSize": 12, "titleFontSize": 14, "titlePadding": 10},
             "style": {"cell": {"stroke": "transparent"}}
         }
     }
+
     return vega_spec
+
 
 
 # ==================== 6. 可视化更新逻辑 ====================
