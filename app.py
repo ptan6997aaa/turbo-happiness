@@ -12,10 +12,12 @@ try:
     df_dimStu = pd.read_excel("DimStudents.xlsx", sheet_name="Sheet1")
     df_dimCal = pd.read_excel("DimCalendar.xlsx", sheet_name="Date")
     df_dimSub = pd.read_excel("DimSubjects.xlsx", sheet_name="DimSubjects")
+    df_dimAss = pd.read_excel("DimAssessment.xlsx", sheet_name="Sheet1")
 
     # 宽表构建
     df = pd.merge(df_fact, df_dimStu[["StudentID", "GradeLevel"]], on="StudentID", how="left")
     df = pd.merge(df, df_dimSub[["SubjectID", "SubjectName"]], on="SubjectID", how="left")
+    df = pd.merge(df, df_dimAss[["AssessmentID", "AssessmentName"]], on="AssessmentID", how="left")
 
     # 构造 YearQuarterConcat 为 "2022-Q1" 格式
     df_dimCal["YearQuarterConcat"] = df_dimCal["Year"].astype(str) + "-Q" + df_dimCal["QuarterNumber"].astype(str)
@@ -64,6 +66,7 @@ app.layout = dbc.Container([
     dcc.Store(id='store-subject', data='All'),
     dcc.Store(id='store-assess-grade', data='All'),
     dcc.Store(id='store-quarter', data='All'),
+    dcc.Store(id='store-assessment', data='All'),
 
     # Title Row
     dbc.Row([
@@ -111,7 +114,12 @@ app.layout = dbc.Container([
     dbc.Row([
         dbc.Col(dbc.Card([
             dbc.CardBody(dvc.Vega(id="chart-subject", signalsToObserve=["sel_subject"], style={'width': '100%'}))
-        ], style={"box-shadow": "0 2px 4px rgba(0,0,0,0.05)", "border-radius": "8px"}), width=12),
+        ], style={"box-shadow": "0 2px 4px rgba(0,0,0,0.05)", "border-radius": "8px"}), width=6),
+        
+        dbc.Col(
+        dbc.Card([
+            dbc.CardBody(dvc.Vega(id="chart-assessment", signalsToObserve=["sel_assessment"], style={'width': '100%'}))
+        ], style={"box-shadow": "0 2px 4px rgba(0,0,0.0.05)", "border-radius": "8px"}), width=6), 
     ], className="mb-4"),
 
     # Filter Status
@@ -124,26 +132,29 @@ app.layout = dbc.Container([
     [Output('store-grade', 'data'),
      Output('store-subject', 'data'),
      Output('store-assess-grade', 'data'),
-     Output('store-quarter', 'data')],
+     Output('store-quarter', 'data'),
+     Output('store-assessment', 'data')],
     [Input('btn-reset', 'n_clicks'),
      Input('chart-grade', 'signalData'),
      Input('chart-subject', 'signalData'),
      Input('chart-assess', 'signalData'),
-     Input('chart-quarter', 'signalData')],
+     Input('chart-quarter', 'signalData'),
+     Input('chart-assessment', 'signalData')],
     [State('store-grade', 'data'),
      State('store-subject', 'data'),
      State('store-assess-grade', 'data'),
-     State('store-quarter', 'data')]
+     State('store-quarter', 'data'),
+     State('store-assessment', 'data')]
 )
-def manage_filters(n_clicks, sig_grade, sig_subj, sig_assess, sig_quarter,
-                   curr_grade, curr_subj, curr_assess, curr_quarter):
+def manage_filters(n_clicks, sig_grade, sig_subj, sig_assess, sig_quarter, sig_assessment,
+                   curr_grade, curr_subj, curr_assess, curr_quarter, curr_assessment):
     ctx = callback_context
     if not ctx.triggered:
-        return "All", "All", "All", "All"
+        return "All", "All", "All", "All", "All" 
     
     trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
     if trigger_id == 'btn-reset':
-        return "All", "All", "All", "All"
+        return "All", "All", "All", "All", "All"  
 
     def process_signal(signal_data, signal_name, key_name, current_filter):
         if not signal_data or signal_name not in signal_data:
@@ -166,23 +177,28 @@ def manage_filters(n_clicks, sig_grade, sig_subj, sig_assess, sig_quarter,
 
     if trigger_id == 'chart-grade':
         new_grade = process_signal(sig_grade, 'sel_grade', 'GradeLevel', curr_grade)
-        return new_grade, curr_subj, curr_assess, curr_quarter
+        return new_grade, curr_subj, curr_assess, curr_quarter, curr_assessment  
+
     if trigger_id == 'chart-subject':
         new_subj = process_signal(sig_subj, 'sel_subject', None, curr_subj)
-        return curr_grade, new_subj, curr_assess, curr_quarter
+        return curr_grade, new_subj, curr_assess, curr_quarter, curr_assessment  
+
     if trigger_id == 'chart-assess':
         new_assess = process_signal(sig_assess, 'sel_assess', 'Assessment_Grade', curr_assess)
-        return curr_grade, curr_subj, new_assess, curr_quarter
+        return curr_grade, curr_subj, new_assess, curr_quarter, curr_assessment  
+
     if trigger_id == 'chart-quarter':
         new_quarter = process_signal(sig_quarter, 'sel_quarter', 'YearQuarterConcat', curr_quarter)
-        return curr_grade, curr_subj, curr_assess, new_quarter
+        return curr_grade, curr_subj, curr_assess, new_quarter, curr_assessment  
 
-    return curr_grade, curr_subj, curr_assess, curr_quarter
+    if trigger_id == 'chart-assessment':
+        new_assessment = process_signal(sig_assessment, 'sel_assessment', None, curr_assessment)
+        return curr_grade, curr_subj, curr_assess, curr_quarter, new_assessment  
 
 
 # ==================== 4. 全局辅助筛选函数 ====================
-def filter_df(ignore_grade=False, ignore_subj=False, ignore_assess=False, ignore_quarter=False,
-              _sel_grade="All", _sel_subj="All", _sel_assess="All", _sel_quarter="All"):
+def filter_df(ignore_grade=False, ignore_subj=False, ignore_assess=False, ignore_quarter=False, ignore_assessment=False,
+              _sel_grade="All", _sel_subj="All", _sel_assess="All", _sel_quarter="All", _sel_assessment="All"):
     d = df.copy()
     if not ignore_grade and _sel_grade != "All":
         d = d[d["GradeLevel"] == _sel_grade]
@@ -192,6 +208,8 @@ def filter_df(ignore_grade=False, ignore_subj=False, ignore_assess=False, ignore
         d = d[d["Assessment_Grade"] == _sel_assess]
     if not ignore_quarter and _sel_quarter != "All":
         d = d[d["YearQuarterConcat"] == _sel_quarter]
+    if not ignore_assessment and _sel_assessment != "All": 
+        d = d[d["AssessmentName"] == _sel_assessment]
     return d
 
 
@@ -736,6 +754,180 @@ def build_bar_quarter(df_in, selected_quarter=None, global_mean=None, use_global
     }
     return vega_spec
 
+def build_bar_assessment(df_in, selected_val, use_global_mean=False):
+    if df_in.empty or "AssessmentName" not in df_in.columns:
+        return alt.Chart(pd.DataFrame({'text': ['No Data']})).mark_text(size=20).encode(text='text:N').to_dict()
+
+    df_agg = df_in.groupby("AssessmentName")["Score"].mean().reset_index()
+    df_agg.rename(columns={"Score": "Average of Score"}, inplace=True)
+
+    if use_global_mean and GLOBAL_MEAN_SCORE is not None:
+        df_agg["MeanScore"] = GLOBAL_MEAN_SCORE
+    else:
+        df_agg["MeanScore"] = df_agg["Average of Score"].mean()
+
+    min_score = df_agg["Average of Score"].min()
+    df_agg["YAxisBaseline"] = min_score - 5
+
+    data_values = df_agg.to_dict(orient="records")
+    current_selection = selected_val if selected_val != "All" else None
+
+    vega_spec = {
+        "$schema": "https://vega.github.io/schema/vega/v6.json",
+        "description": "Bar chart for Assessment Average Scores",
+        "background": "white",
+        "padding": 10,
+        "width": 650,
+        "height": 350,
+        "autosize": {"type": "fit", "contains": "padding"},
+        "title": {
+            "text": "Assessment Performance",
+            "subtitle": ["Average Score per Assessment vs. Overall Mean"],
+            "anchor": "start",
+            "fontSize": 16,
+            "subtitleFontSize": 12,
+            "subtitleColor": "gray",
+            "offset": 20
+        },
+        "style": "cell",
+        "data": [
+            {"name": "data_1", "values": data_values},
+            {"name": "data_3", "source": "data_1"},
+            {
+                "name": "data_4",
+                "source": "data_1",
+                "transform": [
+                    {"type": "window", "as": ["rowNum"], "ops": ["row_number"], "fields": [None],
+                     "sort": {"field": [], "order": []}},
+                    {"type": "filter", "expr": "datum.rowNum === 1"}
+                ]
+            }
+        ],
+        "signals": [
+            {
+                "name": "hovered_assessment",
+                "value": None,
+                "on": [
+                    {"events": "@layer_0_marks:mouseover", "update": "datum.AssessmentName"},
+                    {"events": "@layer_0_marks:mouseout", "update": "null"}
+                ]
+            },
+            {
+                "name": "sel_assessment",
+                "value": current_selection,
+                "on": [
+                    {"events": "@layer_0_marks:click",
+                     "update": "datum.AssessmentName === sel_assessment ? null : datum.AssessmentName"},
+                    {"events": "dblclick", "update": "null"}
+                ]
+            }
+        ],
+        "marks": [
+            {
+                "name": "layer_0_marks",
+                "type": "rect",
+                "clip": True,
+                "from": {"data": "data_1"},
+                "encode": {
+                    "update": {
+                        "cursor": {"value": "pointer"},
+                        "cornerRadiusTopLeft": {"value": 10},
+                        "cornerRadiusTopRight": {"value": 10},
+                        "fill": [
+                            {"test": "datum['Average of Score'] < datum.MeanScore", "value": "#EF8354"},
+                            {"value": "#2D3142"}
+                        ],
+                        "fillOpacity": [
+                            {"test": "hovered_assessment === datum.AssessmentName", "value": 1},
+                            {"test": "sel_assessment && datum.AssessmentName !== sel_assessment", "value": 0.2},
+                            {"value": 0.9}
+                        ],
+                        "tooltip": {
+                            "signal": "{'Assessment': datum['AssessmentName'], 'Avg Score': format(datum['Average of Score'], '.1f'), 'Overall Mean': format(datum['MeanScore'], '.1f')}"
+                        },
+                        "x": {"scale": "x", "field": "AssessmentName", "band": 0.2},
+                        "width": {"signal": "max(0.25, 0.6 * bandwidth('x'))"},
+                        "y": {"scale": "y", "field": "Average of Score"},
+                        "y2": {"scale": "y", "field": "YAxisBaseline"}
+                    }
+                }
+            },
+            {
+                "name": "layer_2_marks",
+                "type": "rule",
+                "from": {"data": "data_3"},
+                "encode": {
+                    "update": {
+                        "strokeDash": {"value": [6, 4]},
+                        "stroke": {"value": "#444"},
+                        "x": {"field": {"group": "width"}},
+                        "x2": {"value": 0},
+                        "y": {"scale": "y", "field": "MeanScore"},
+                        "strokeWidth": {"value": 2}
+                    }
+                }
+            },
+            {
+                "name": "layer_3_marks",
+                "type": "text",
+                "from": {"data": "data_4"},
+                "encode": {
+                    "update": {
+                        "text": {"signal": "'Overall Avg ' + format(datum['MeanScore'], '.1f')"},
+                        "align": {"value": "right"},
+                        "dx": {"value": 0},
+                        "dy": {"value": -8},
+                        "fontSize": {"value": 12},
+                        "fontWeight": {"value": "bold"},
+                        "fill": {"value": "#444"},
+                        "x": {"field": {"group": "width"}},
+                        "y": {"scale": "y", "field": "MeanScore"},
+                        "baseline": {"value": "middle"}
+                    }
+                }
+            }
+        ],
+        "scales": [
+            {
+                "name": "x",
+                "type": "band",
+                "domain": {
+                    "data": "data_1",
+                    "field": "AssessmentName",
+                    "sort": {"field": "Average of Score", "op": "max", "order": "descending"}
+                },
+                "range": [0, {"signal": "width"}],
+                "paddingInner": 0.1,
+                "paddingOuter": 0.05
+            },
+            {
+                "name": "y",
+                "type": "linear",
+                "domain": {
+                    "fields": [
+                        {"data": "data_1", "field": "Average of Score"},
+                        {"data": "data_1", "field": "YAxisBaseline"},
+                        {"data": "data_3", "field": "MeanScore"}
+                    ]
+                },
+                "range": [{"signal": "height"}, 0],
+                "nice": True,
+                "zero": False
+            }
+        ],
+        "axes": [
+            {"scale": "y", "orient": "left", "grid": True, "gridColor": "#DAD8D7",
+             "gridOpacity": 0.5, "title": "Avg Score", "zindex": 0},
+            {"scale": "x", "orient": "bottom", "labelAngle": 325,
+             "labelAlign": "right", "zindex": 0}
+        ],
+        "config": {
+            "axis": {"labelFontSize": 12, "titleFontSize": 14, "titlePadding": 10},
+            "style": {"cell": {"stroke": "transparent"}}
+        }
+    }
+    return vega_spec
+
 
 # ==================== 6. 可视化更新逻辑 ====================
 @app.callback(
@@ -747,15 +939,16 @@ def build_bar_quarter(df_in, selected_quarter=None, global_mean=None, use_global
      Output('chart-assess', 'spec'),
      Output('chart-subject', 'spec'),
      Output('chart-quarter', 'spec'),
+     Output('chart-assessment', 'spec'),
      Output('filter-status', 'children')],
     [Input('store-grade', 'data'),
      Input('store-subject', 'data'),
      Input('store-assess-grade', 'data'),
-     Input('store-quarter', 'data')]
+     Input('store-quarter', 'data'),
+     Input('store-assessment', 'data')]
 )
-def update_visuals(sel_grade, sel_subj, sel_assess, sel_quarter):
-    # 局部 filter_df 使用当前筛选状态
-    def local_filter_df(ignore_grade=False, ignore_subj=False, ignore_assess=False, ignore_quarter=False):
+def update_visuals(sel_grade, sel_subj, sel_assess, sel_quarter, sel_assessment):
+    def local_filter_df(ignore_grade=False, ignore_subj=False, ignore_assess=False, ignore_quarter=False, ignore_assessment=False):
         d = df.copy()
         if not ignore_grade and sel_grade != "All":
             d = d[d["GradeLevel"] == sel_grade]
@@ -765,16 +958,15 @@ def update_visuals(sel_grade, sel_subj, sel_assess, sel_quarter):
             d = d[d["Assessment_Grade"] == sel_assess]
         if not ignore_quarter and sel_quarter != "All":
             d = d[d["YearQuarterConcat"] == sel_quarter]
-        return d
+        if not ignore_assessment and sel_assessment != "All":
+            d = d[d["AssessmentName"] == sel_assessment]
+        return d 
 
-    # 所有 KPI 及“Overall Avg”都基于完整筛选条件
     df_kpi = local_filter_df()
     if df_kpi.empty:
         k_avg = k_w = k_pass = k_perf = "N/A"
-        global_mean = None
     else:
         global_mean_value = df_kpi['Score'].mean()
-        global_mean = global_mean_value
         k_avg = f"{global_mean_value:.2f}"
         if "WeightedScore" in df_kpi.columns and "Weight" in df_kpi.columns:
             total_w = df_kpi["Weight"].sum()
@@ -784,20 +976,22 @@ def update_visuals(sel_grade, sel_subj, sel_assess, sel_quarter):
         k_pass = f"{(df_kpi['PassedScore'] == 'Pass').mean() * 100:.1f}%"
         k_perf = f"{(df_kpi['Score'] == perfect_target).mean() * 100:.1f}%"
 
-    # 各图忽略自身维度，实现 cross filter 而不“自过滤掉自己”
+    # 各图忽略自身维度
     df_grade = local_filter_df(ignore_grade=True)
     df_assess = local_filter_df(ignore_assess=True)
     df_subject = local_filter_df(ignore_subj=True)
     df_quarter = local_filter_df(ignore_quarter=True)
+    df_assessment = local_filter_df(ignore_assessment=True)
 
     spec_grade = build_donut_grade(df_grade, sel_grade)
     spec_assess = build_donut_assess(df_assess, sel_assess)
     spec_subject = build_bar_subject(df_subject, sel_subj, use_global_mean=True)
     spec_quarter = build_bar_quarter(df_quarter, sel_quarter, use_global_mean=True)
+    spec_assessment = build_bar_assessment(df_assessment, sel_assessment, use_global_mean=True)
 
+    status_text = f"Filters: Grade='{sel_grade}' | Subject='{sel_subj}' | AssessGrade='{sel_assess}' | Assessment='{sel_assessment}' | Quarter='{sel_quarter}'"
 
-    status_text = f"Filters: Grade='{sel_grade}' | Subject='{sel_subj}' | Assess='{sel_assess}' | Quarter='{sel_quarter}'"
-    return k_avg, k_w, k_pass, k_perf, spec_grade, spec_assess, spec_subject, spec_quarter, status_text
+    return k_avg, k_w, k_pass, k_perf, spec_grade, spec_assess, spec_subject, spec_quarter, spec_assessment, status_text
 
 
 # ==================== 7. 启动应用 ====================
