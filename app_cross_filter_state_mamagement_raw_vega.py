@@ -13,10 +13,14 @@ df_dimStu = pd.read_excel("DimStudents.xlsx", sheet_name="Sheet1")
 df_dimCal = pd.read_excel("DimCalendar.xlsx", sheet_name="Date")
 df_dimSub = pd.read_excel("DimSubjects.xlsx", sheet_name="DimSubjects")
 
+# 构建分析宽表 
 df = pd.merge(df_fact, df_dimStu[["StudentID", "GradeLevel"]], on="StudentID", how="left")
 df = pd.merge(df, df_dimSub[["SubjectID", "SubjectName"]], on="SubjectID", how="left")
-df_dimCal["YearQuarterConcat"] = df_dimCal["Year"].astype(str) + " Q" + df_dimCal["QuarterNumber"].astype(str)
-df = pd.merge(df, df_dimCal[["DateKey", "YearQuarterConcat"]], on="DateKey", how="left") 
+
+# 构造时间标签（用于前端展示）
+df_dimCal["YearQuarterConcat"] = df_dimCal["Year"].astype(str) + "-" + df_dimCal["QuarterNumber"].apply(lambda x: f"{x:02d}")
+df_dimCal["YearMonthConcat"] = df_dimCal["Year"].astype(str) + "-" + df_dimCal["Month"].apply(lambda x: f"{x:02d}")
+df = pd.merge(df, df_dimCal[["DateKey", "YearQuarterConcat", "YearMonthConcat"]], on="DateKey", how="left")
 
 df["PassedScore"] = df["Score"].apply(lambda x: "Pass" if x >= 55 else "Fail")
 
@@ -48,6 +52,7 @@ app.layout = dbc.Container([
     dcc.Store(id='store-subject', data='All'),
     dcc.Store(id='store-assess-grade', data='All'),
 
+    # Title Row
     dbc.Row([
         dbc.Col(html.H2("🎓 Student Performance Dashboard", className="fw-bold my-3"), width=9),
         dbc.Col(
@@ -56,6 +61,7 @@ app.layout = dbc.Container([
         )
     ], className="mb-4 border-bottom pb-3"),
 
+    # KPI Row
     dbc.Row([
         dbc.Col(dbc.Card(dbc.CardBody([html.H6("Average Score"), html.H3(id="kpi-avg", className="fw-bold")]), style=KPI_STYLE), width=3),
         dbc.Col(dbc.Card(dbc.CardBody([html.H6("Weighted Avg"), html.H3(id="kpi-wavg", className="fw-bold")]), style=KPI_STYLE), width=3),
@@ -63,25 +69,45 @@ app.layout = dbc.Container([
         dbc.Col(dbc.Card(dbc.CardBody([html.H6("Perfect Rate"), html.H3(id="kpi-perfect", className="fw-bold")]), style=KPI_STYLE), width=3),
     ], className="mb-4"),
 
+    # Three Charts in One Row
     dbc.Row([
-        dbc.Col(dbc.Card([
-            dbc.CardHeader("Student Count by Grade Level", className="fw-bold text-center"),
-            dbc.CardBody(dvc.Vega(id="chart-grade", signalsToObserve=["sel_grade"], style={"height": "380px"}))
-        ], className="shadow"), width=6),
-
-        dbc.Col(dbc.Card([
-            dbc.CardHeader("Exam Count by Assessment Grade", className="fw-bold text-center"),
-            dbc.CardBody(dvc.Vega(id="chart-assess", signalsToObserve=["sel_assess"], style={"height": "380px"}))
-        ], className="shadow"), width=6),
+        dbc.Col(
+            dbc.Card([
+                dbc.CardHeader("Student Count by Grade Level", className="fw-bold text-center"),
+                dbc.CardBody(dvc.Vega(id="chart-grade", signalsToObserve=["sel_grade"], style={"height": "380px"}))
+            ], className="shadow"),
+            width=3
+        ),
+        dbc.Col(
+            dbc.Card([
+                dbc.CardHeader("Exam Count by Assessment Grade", className="fw-bold text-center"),
+                dbc.CardBody(dvc.Vega(id="chart-assess", signalsToObserve=["sel_assess"], style={"height": "380px"}))
+            ], className="shadow"),
+            width=3
+        ),
+        dbc.Col(
+            dbc.Card([
+                dbc.CardHeader("Future Bar Chart", className="fw-bold text-center text-muted"),
+                dbc.CardBody([
+                    html.Div(
+                        "Placeholder reserved for additional bar chart.",
+                        className="d-flex justify-content-center align-items-center h-100 fw-light",
+                        style={"height": "380px", "color": "#6c757d"}
+                    )
+                ])
+            ], className="shadow"),
+            width=6
+        ),
     ], className="mb-4"),
 
+    # Subject Chart (full width)
     dbc.Row([
         dbc.Col(dbc.Card([
-            # 这里的 Header 留白，因为 Vega 图表本身包含了 Title
             dbc.CardBody(dvc.Vega(id="chart-subject", signalsToObserve=["sel_subject"], style={'width': '100%'}))
         ], style={"box-shadow": "0 2px 4px rgba(0,0,0,0.05)", "border-radius": "8px"}), width=12),
     ], className="mb-4"),
 
+    # Filter Status
     dbc.Row(dbc.Col(html.Div(id="filter-status", className="text-muted small mt-4 text-end fst-italic")))
 ], fluid=True, className="bg-light vh-100 p-4")
 
@@ -197,7 +223,7 @@ def update_visuals(sel_grade, sel_subj, sel_assess):
         agg['Share'] = agg['TotalPlayers'] / grand_total if grand_total > 0 else 0
         init_value = [{'GradeLevel': selected_val}] if selected_val != "All" else None
         sel = alt.selection_point(name='sel_grade', fields=['GradeLevel'], value=init_value, on='click', empty='none')
-        color = alt.condition(sel, alt.Color('GradeLevel:N', sort='-color'), alt.value('#dddddd'))
+        color = alt.condition(sel, alt.Color('GradeLevel:N', sort='-color', legend=None), alt.value('#dddddd'))
         opacity = alt.condition(sel, alt.value(0.4), alt.value(0.9))
         donut = (
             alt.Chart(agg)
@@ -222,7 +248,7 @@ def update_visuals(sel_grade, sel_subj, sel_assess):
         color_map = {'A':'#2ecc71','B':'#3498db','C':'#f1c40f','D':'#e67e22','F':'#e74c3c'}
         init_value = [{"Assessment_Grade": selected_val}] if selected_val != "All" else None
         sel = alt.selection_point(name="sel_assess", fields=["Assessment_Grade"], value=init_value, on='click', empty='none')
-        color = alt.condition(sel, alt.Color("Assessment_Grade:N", scale=alt.Scale(domain=['A','B','C','D','F'], range=list(color_map.values()))), alt.value('#dddddd'))
+        color = alt.condition(sel, alt.Color("Assessment_Grade:N", scale=alt.Scale(domain=['A','B','C','D','F'], range=list(color_map.values())), legend=None), alt.value('#dddddd'))
         opacity = alt.condition(sel, alt.value(0.4), alt.value(0.9))
         donut = (
             alt.Chart(counts)
@@ -237,7 +263,7 @@ def update_visuals(sel_grade, sel_subj, sel_assess):
         )
         return donut.to_dict()
 
-    def build_vega_subject(df_in, selected_val):
+    def build_bar_subject(df_in, selected_val):
         # 1. 预处理数据以匹配 Vega 规范要求的字段名
         if df_in.empty:
             return {"$schema": "https://vega.github.io/schema/vega/v5.json", "marks": [{"type": "text", "encode": {"update": {"text": {"value": "No Data"}, "x": {"value": 100}, "y": {"value": 100}}}}]}
@@ -533,7 +559,7 @@ def update_visuals(sel_grade, sel_subj, sel_assess):
 
     spec_grade = build_donut_grade(df_grade, sel_grade)
     spec_assess = build_donut_assess(df_assess, sel_assess)
-    spec_subject = build_vega_subject(df_subject, sel_subj) # 调用新的 Vega 构建函数
+    spec_subject = build_bar_subject(df_subject, sel_subj) # 调用新的 Vega 构建函数
 
     status_text = f"Filters: GradeLevel='{sel_grade}' | Subject='{sel_subj}' | Assessment Grade='{sel_assess}'"
     return k_avg, k_w, k_pass, k_perf, spec_grade, spec_assess, spec_subject, status_text  

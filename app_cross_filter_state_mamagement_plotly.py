@@ -51,7 +51,7 @@ except FileNotFoundError:
         'SubjectName': ['Math', 'Science', 'English', 'History']
     })
 
-# ── 构建分析宽表：星型模型展开 ─────────────────────────────────────────────────
+# ── 构建分析宽表 ─────────────────────────────────────────────────
 df = pd.merge(df_fact, df_dimStu[["StudentID", "GradeLevel"]], on="StudentID", how="left")
 df = pd.merge(df, df_dimSub[["SubjectID", "SubjectName"]], on="SubjectID", how="left")
 

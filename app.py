@@ -13,10 +13,14 @@ df_dimStu = pd.read_excel("DimStudents.xlsx", sheet_name="Sheet1")
 df_dimCal = pd.read_excel("DimCalendar.xlsx", sheet_name="Date")
 df_dimSub = pd.read_excel("DimSubjects.xlsx", sheet_name="DimSubjects")
 
+# 构建分析宽表 
 df = pd.merge(df_fact, df_dimStu[["StudentID", "GradeLevel"]], on="StudentID", how="left")
 df = pd.merge(df, df_dimSub[["SubjectID", "SubjectName"]], on="SubjectID", how="left")
-df_dimCal["YearQuarterConcat"] = df_dimCal["Year"].astype(str) + " Q" + df_dimCal["QuarterNumber"].astype(str)
-df = pd.merge(df, df_dimCal[["DateKey", "YearQuarterConcat"]], on="DateKey", how="left") 
+
+# 构造时间标签（用于前端展示）
+df_dimCal["YearQuarterConcat"] = df_dimCal["Year"].astype(str) + "-" + df_dimCal["QuarterNumber"].apply(lambda x: f"{x:02d}")
+df_dimCal["YearMonthConcat"] = df_dimCal["Year"].astype(str) + "-" + df_dimCal["Month"].apply(lambda x: f"{x:02d}")
+df = pd.merge(df, df_dimCal[["DateKey", "YearQuarterConcat", "YearMonthConcat"]], on="DateKey", how="left")
 
 df["PassedScore"] = df["Score"].apply(lambda x: "Pass" if x >= 55 else "Fail")
 
@@ -48,6 +52,7 @@ app.layout = dbc.Container([
     dcc.Store(id='store-subject', data='All'),
     dcc.Store(id='store-assess-grade', data='All'),
 
+    # Title Row
     dbc.Row([
         dbc.Col(html.H2("🎓 Student Performance Dashboard", className="fw-bold my-3"), width=9),
         dbc.Col(
@@ -56,6 +61,7 @@ app.layout = dbc.Container([
         )
     ], className="mb-4 border-bottom pb-3"),
 
+    # KPI Row
     dbc.Row([
         dbc.Col(dbc.Card(dbc.CardBody([html.H6("Average Score"), html.H3(id="kpi-avg", className="fw-bold")]), style=KPI_STYLE), width=3),
         dbc.Col(dbc.Card(dbc.CardBody([html.H6("Weighted Avg"), html.H3(id="kpi-wavg", className="fw-bold")]), style=KPI_STYLE), width=3),
@@ -63,25 +69,39 @@ app.layout = dbc.Container([
         dbc.Col(dbc.Card(dbc.CardBody([html.H6("Perfect Rate"), html.H3(id="kpi-perfect", className="fw-bold")]), style=KPI_STYLE), width=3),
     ], className="mb-4"),
 
+    # Three Charts in One Row
     dbc.Row([
-        dbc.Col(dbc.Card([
-            dbc.CardHeader("Student Count by Grade Level", className="fw-bold text-center"),
-            dbc.CardBody(dvc.Vega(id="chart-grade", signalsToObserve=["sel_grade"], style={"height": "380px"}))
-        ], className="shadow"), width=6),
-
-        dbc.Col(dbc.Card([
-            dbc.CardHeader("Exam Count by Assessment Grade", className="fw-bold text-center"),
-            dbc.CardBody(dvc.Vega(id="chart-assess", signalsToObserve=["sel_assess"], style={"height": "380px"}))
-        ], className="shadow"), width=6),
+        dbc.Col(
+            dbc.Card([
+                dbc.CardHeader("Student Count by Grade Level", className="fw-bold text-center"),
+                dbc.CardBody(dvc.Vega(id="chart-grade", signalsToObserve=["sel_grade"], style={"height": "380px"}))
+            ], className="shadow"),
+            width=3
+        ),
+        dbc.Col(
+            dbc.Card([
+                dbc.CardHeader("Exam Count by Assessment Grade", className="fw-bold text-center"),
+                dbc.CardBody(dvc.Vega(id="chart-assess", signalsToObserve=["sel_assess"], style={"height": "380px"}))
+            ], className="shadow"),
+            width=3
+        ),
+        dbc.Col(
+            dbc.Card([
+                dbc.CardHeader("Quarterly Performance", className="fw-bold text-center"),
+                dbc.CardBody(dvc.Vega(id="chart-quarter", style={"height": "380px"}))
+            ], className="shadow"),
+            width=6
+        ),
     ], className="mb-4"),
 
+    # Subject Chart (full width)
     dbc.Row([
         dbc.Col(dbc.Card([
-            # 这里的 Header 留白，因为 Vega 图表本身包含了 Title
             dbc.CardBody(dvc.Vega(id="chart-subject", signalsToObserve=["sel_subject"], style={'width': '100%'}))
         ], style={"box-shadow": "0 2px 4px rgba(0,0,0,0.05)", "border-radius": "8px"}), width=12),
     ], className="mb-4"),
 
+    # Filter Status
     dbc.Row(dbc.Col(html.Div(id="filter-status", className="text-muted small mt-4 text-end fst-italic")))
 ], fluid=True, className="bg-light vh-100 p-4")
 
@@ -158,6 +178,7 @@ def manage_filters(n_clicks, sig_grade, sig_subj, sig_assess, curr_grade, curr_s
      Output('chart-grade', 'spec'),
      Output('chart-assess', 'spec'),
      Output('chart-subject', 'spec'),
+     Output('chart-quarter', 'spec'), 
      Output('filter-status', 'children')],
     [Input('store-grade', 'data'),
      Input('store-subject', 'data'),
@@ -197,7 +218,7 @@ def update_visuals(sel_grade, sel_subj, sel_assess):
         agg['Share'] = agg['TotalPlayers'] / grand_total if grand_total > 0 else 0
         init_value = [{'GradeLevel': selected_val}] if selected_val != "All" else None
         sel = alt.selection_point(name='sel_grade', fields=['GradeLevel'], value=init_value, on='click', empty='none')
-        color = alt.condition(sel, alt.Color('GradeLevel:N', sort='-color'), alt.value('#dddddd'))
+        color = alt.condition(sel, alt.Color('GradeLevel:N', sort='-color', legend=None), alt.value('#dddddd'))
         opacity = alt.condition(sel, alt.value(0.4), alt.value(0.9))
         donut = (
             alt.Chart(agg)
@@ -222,7 +243,7 @@ def update_visuals(sel_grade, sel_subj, sel_assess):
         color_map = {'A':'#2ecc71','B':'#3498db','C':'#f1c40f','D':'#e67e22','F':'#e74c3c'}
         init_value = [{"Assessment_Grade": selected_val}] if selected_val != "All" else None
         sel = alt.selection_point(name="sel_assess", fields=["Assessment_Grade"], value=init_value, on='click', empty='none')
-        color = alt.condition(sel, alt.Color("Assessment_Grade:N", scale=alt.Scale(domain=['A','B','C','D','F'], range=list(color_map.values()))), alt.value('#dddddd'))
+        color = alt.condition(sel, alt.Color("Assessment_Grade:N", scale=alt.Scale(domain=['A','B','C','D','F'], range=list(color_map.values())), legend=None), alt.value('#dddddd'))
         opacity = alt.condition(sel, alt.value(0.4), alt.value(0.9))
         donut = (
             alt.Chart(counts)
@@ -237,10 +258,10 @@ def update_visuals(sel_grade, sel_subj, sel_assess):
         )
         return donut.to_dict()
 
-    def build_vega_subject(df_in, selected_val):
+    def build_bar_subject(df_in, selected_val):
         # 1. 预处理数据以匹配 Vega 规范要求的字段名
         if df_in.empty:
-            return {"$schema": "https://vega.github.io/schema/vega/v5.json", "marks": [{"type": "text", "encode": {"update": {"text": {"value": "No Data"}, "x": {"value": 100}, "y": {"value": 100}}}}]}
+            return {"$schema": "https://vega.github.io/schema/vega/v5.json  ", "marks": [{"type": "text", "encode": {"update": {"text": {"value": "No Data"}, "x": {"value": 100}, "y": {"value": 100}}}}]}
 
         df_agg = df_in.groupby("SubjectName")["Score"].mean().reset_index()
         df_agg.rename(columns={"Score": "Average of Score"}, inplace=True)
@@ -250,7 +271,7 @@ def update_visuals(sel_grade, sel_subj, sel_assess):
 
         # 3. 嵌入 Raw Vega JSON (注意：null -> None, true -> True, false -> False)
         vega_spec = {
-          "$schema": "https://vega.github.io/schema/vega/v6.json",
+          "$schema": "https://vega.github.io/schema/vega/v6.json  ",
           "description": "Bar chart with average line for Subject Scores",
           "background": "white",
           "padding": 10,
@@ -527,17 +548,190 @@ def update_visuals(sel_grade, sel_subj, sel_assess):
         }
         return vega_spec
 
+    def build_bar_quarter(df_in):
+        if df_in.empty or 'YearQuarterConcat' not in df_in.columns:
+            return {
+                "$schema": "https://vega.github.io/schema/vega/v6.json",
+                "marks": [{"type": "text", "encode": {"update": {"text": {"value": "No Data"}, "x": {"value": 100}, "y": {"value": 100}}}}]
+            }
+
+        # 聚合：每个 YearQuarterConcat 的平均分
+        agg_quarter = df_in.groupby('YearQuarterConcat')['Score'].mean().reset_index()
+        agg_quarter.rename(columns={'Score': 'Average of Score'}, inplace=True)
+        # 计算全局平均（在当前筛选下，不忽略季度）
+        global_mean = df_in['Score'].mean()
+
+        agg_quarter['MeanScore'] = global_mean
+        agg_quarter['MinScore'] = agg_quarter['Average of Score'].min()
+        agg_quarter['YAxisBaseline'] = agg_quarter['MinScore'] - 5
+        data_values = agg_quarter.to_dict(orient='records')
+
+        vega_spec = {
+            "$schema": "https://vega.github.io/schema/vega/v6.json",
+            "background": "white",
+            "padding": 10,
+            "width": 650,
+            "height": 350,
+            "autosize": {"type": "fit", "contains": "padding"},
+            "title": {
+                "text": "Quarterly Performance",
+                "subtitle": ["Average Score per Quarter"],
+                "anchor": "start",
+                "fontSize": 16,
+                "subtitleFontSize": 12,
+                "subtitleColor": "gray",
+                "offset": 20
+            },
+            "style": "cell",
+            "data": [
+                {"name": "dataset", "values": data_values},
+                {
+                    "name": "data_0",
+                    "source": "dataset",
+                    "transform": [
+                        {"type": "formula", "expr": "datum['MinScore'] - 5", "as": "YAxisBaseline"}
+                    ]
+                },
+                {
+                    "name": "data_1",
+                    "source": "data_0",
+                    "transform": [
+                        {"type": "filter", "expr": "isValid(datum['Average of Score']) && isFinite(+datum['Average of Score'])"}
+                    ]
+                },
+                {"name": "data_3", "source": "data_0"},
+                {
+                    "name": "data_4",
+                    "source": "data_0",
+                    "transform": [
+                        {"type": "window", "as": ["rowNum"], "ops": ["row_number"], "fields": [None], "sort": {"field": [], "order": []}},
+                        {"type": "filter", "expr": "datum.rowNum === 1"}
+                    ]
+                }
+            ],
+            "marks": [
+                {
+                    "type": "rect",
+                    "clip": True,
+                    "from": {"data": "data_1"},
+                    "encode": {
+                        "update": {
+                            "x": {"scale": "x", "field": "YearQuarterConcat", "band": 0.2},
+                            "width": {"signal": "max(0.25, 0.6 * bandwidth('x'))"},
+                            "y": {"scale": "y", "field": "Average of Score"},
+                            "y2": {"scale": "y", "field": "YAxisBaseline"},
+                            "fill": [
+                                {"test": "datum['Average of Score'] < datum.MeanScore", "value": "#EF8354"},
+                                {"value": "#2D3142"}
+                            ],
+                            "tooltip": {
+                                "signal": "{'Quarter': datum['YearQuarterConcat'], 'Avg Score': format(datum['Average of Score'], '.1f'), 'Overall Avg': format(datum['MeanScore'], '.1f')}"
+                            },
+                            "cornerRadiusTopLeft": {"value": 10},
+                            "cornerRadiusTopRight": {"value": 10}
+                        }
+                    }
+                },
+                {
+                    "type": "rule",
+                    "from": {"data": "data_3"},
+                    "encode": {
+                        "update": {
+                            "strokeDash": {"value": [6, 4]},
+                            "stroke": {"value": "#444"},
+                            "x": {"field": {"group": "width"}},
+                            "x2": {"value": 0},
+                            "y": {"scale": "y", "field": "MeanScore"},
+                            "strokeWidth": {"value": 2}
+                        }
+                    }
+                },
+                {
+                    "type": "text",
+                    "from": {"data": "data_4"},
+                    "encode": {
+                        "update": {
+                            "text": {"signal": "'Overall Avg ' + format(datum['MeanScore'], '.1f')"},
+                            "align": {"value": "right"},
+                            "dx": {"value": 0},
+                            "dy": {"value": -8},
+                            "fontSize": {"value": 12},
+                            "fontWeight": {"value": "bold"},
+                            "fill": {"value": "#444"},
+                            "x": {"field": {"group": "width"}},
+                            "y": {"scale": "y", "field": "MeanScore"},
+                            "baseline": {"value": "middle"}
+                        }
+                    }
+                }
+            ],
+            "scales": [
+                {
+                    "name": "x",
+                    "type": "band",
+                    "domain": {
+                        "data": "data_1",
+                        "field": "YearQuarterConcat",
+                        "sort": {"field": "YearQuarterConcat", "op": "min", "order": "ascending"}
+                    },
+                    "range": [0, {"signal": "width"}],
+                    "paddingInner": 0.1,
+                    "paddingOuter": 0.05
+                },
+                {
+                    "name": "y",
+                    "type": "linear",
+                    "domain": {
+                        "fields": [
+                            {"data": "data_1", "field": "Average of Score"},
+                            {"data": "data_1", "field": "YAxisBaseline"},
+                            {"data": "data_3", "field": "MeanScore"}
+                        ]
+                    },
+                    "range": [{"signal": "height"}, 0],
+                    "nice": True,
+                    "zero": False
+                }
+            ],
+            "axes": [
+                {
+                    "scale": "y",
+                    "orient": "left",
+                    "grid": True,
+                    "gridColor": "#DAD8D7",
+                    "gridOpacity": 0.5,
+                    "title": "Average Score",
+                    "tickCount": {"signal": "ceil(height/40)"},
+                    "zindex": 0
+                },
+                {
+                    "scale": "x",
+                    "orient": "bottom",
+                    "labelAngle": 325,
+                    "labelAlign": "right",
+                    "zindex": 0
+                }
+            ],
+            "config": {
+                "axis": {"labelFontSize": 12, "titleFontSize": 14, "titlePadding": 10},
+                "style": {"cell": {"stroke": "transparent"}}
+            }
+        }
+        return vega_spec
+    
     df_grade = filter_df(ignore_grade=True)
     df_assess = filter_df(ignore_assess=True)
     df_subject = filter_df(ignore_subj=True)
+    df_quarter = filter_df()  # 使用当前筛选（不忽略任何维度）
 
     spec_grade = build_donut_grade(df_grade, sel_grade)
     spec_assess = build_donut_assess(df_assess, sel_assess)
-    spec_subject = build_vega_subject(df_subject, sel_subj) # 调用新的 Vega 构建函数
+    spec_subject = build_bar_subject(df_subject, sel_subj) # 调用新的 Vega 构建函数 
+    spec_quarter = build_bar_quarter(df_quarter) 
 
     status_text = f"Filters: GradeLevel='{sel_grade}' | Subject='{sel_subj}' | Assessment Grade='{sel_assess}'"
-    return k_avg, k_w, k_pass, k_perf, spec_grade, spec_assess, spec_subject, status_text  
+    return k_avg, k_w, k_pass, k_perf, spec_grade, spec_assess, spec_subject, spec_quarter, status_text  
 
 # ==================== 5. 启动应用 ====================
 if __name__ == "__main__":
-    app.run(debug=True, port=8050)
+    app.run(debug=True, port=8050) 
