@@ -41,6 +41,12 @@ except Exception as e:
     # 假数据用于防止报错
     df = pd.DataFrame()
 
+if not df.empty:
+    GLOBAL_MEAN_SCORE = df['Score'].mean()
+else:
+    GLOBAL_MEAN_SCORE = None
+
+
 # ==================== 2. App Layout ====================
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 server = app.server
@@ -247,7 +253,7 @@ def build_donut_assess(df_in, selected_val):
     return donut.to_dict()
 
 
-def build_bar_subject(df_in, selected_val, global_mean=None):
+def build_bar_subject(df_in, selected_val, global_mean=None, use_global_mean=False):
     if df_in.empty:
         return {
             "$schema": "https://vega.github.io/schema/vega/v6.json",
@@ -266,9 +272,9 @@ def build_bar_subject(df_in, selected_val, global_mean=None):
     df_agg = df_in.groupby("SubjectName")["Score"].mean().reset_index()
     df_agg.rename(columns={"Score": "Average of Score"}, inplace=True)
 
-    # 统一使用外部传入的全局均值（当前所有筛选条件下）
-    if global_mean is not None:
-        df_agg["MeanScore"] = global_mean
+    # 决定用哪个均值 (全局平均线固定不变 VS 平均线随筛选动态变化)
+    if use_global_mean and GLOBAL_MEAN_SCORE is not None:
+        df_agg["MeanScore"] = GLOBAL_MEAN_SCORE
     else:
         df_agg["MeanScore"] = df_agg["Average of Score"].mean()
 
@@ -436,7 +442,7 @@ def build_bar_subject(df_in, selected_val, global_mean=None):
     return vega_spec
 
 
-def build_bar_quarter(df_in, selected_quarter=None, global_mean=None):
+def build_bar_quarter(df_in, selected_quarter=None, global_mean=None, use_global_mean=False):
     if df_in.empty or 'YearQuarterConcat' not in df_in.columns:
         return {
             "$schema": "https://vega.github.io/schema/vega/v6.json",
@@ -456,9 +462,9 @@ def build_bar_quarter(df_in, selected_quarter=None, global_mean=None):
     agg_quarter = df_in.groupby('YearQuarterConcat')['Score'].mean().reset_index()
     agg_quarter.rename(columns={'Score': 'Average of Score'}, inplace=True)
 
-    # 使用统一的全局均值
-    if global_mean is not None:
-        agg_quarter['MeanScore'] = global_mean
+    # 决定用哪个均值 (全局平均线固定不变 VS 平均线随筛选动态变化)
+    if use_global_mean and GLOBAL_MEAN_SCORE is not None:
+        agg_quarter['MeanScore'] = GLOBAL_MEAN_SCORE
     else:
         agg_quarter['MeanScore'] = agg_quarter['Average of Score'].mean()
 
@@ -786,8 +792,9 @@ def update_visuals(sel_grade, sel_subj, sel_assess, sel_quarter):
 
     spec_grade = build_donut_grade(df_grade, sel_grade)
     spec_assess = build_donut_assess(df_assess, sel_assess)
-    spec_subject = build_bar_subject(df_subject, sel_subj, global_mean)
-    spec_quarter = build_bar_quarter(df_quarter, sel_quarter, global_mean)
+    spec_subject = build_bar_subject(df_subject, sel_subj, use_global_mean=True)
+    spec_quarter = build_bar_quarter(df_quarter, sel_quarter, use_global_mean=True)
+
 
     status_text = f"Filters: Grade='{sel_grade}' | Subject='{sel_subj}' | Assess='{sel_assess}' | Quarter='{sel_quarter}'"
     return k_avg, k_w, k_pass, k_perf, spec_grade, spec_assess, spec_subject, spec_quarter, status_text
