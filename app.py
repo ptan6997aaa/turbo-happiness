@@ -6,7 +6,7 @@ import altair as alt
 import pandas as pd
 
 # ==================== 1. 数据加载与预处理 ====================
-# (假设 Excel 文件都在当前目录，实际运行时请确保文件存在)
+# (假设 Excel 文件都在当前目录)
 try:
     df_fact = pd.read_excel("FactPerformance.xlsx", sheet_name="Sheet1")
     df_dimStu = pd.read_excel("DimStudents.xlsx", sheet_name="Sheet1")
@@ -17,7 +17,7 @@ try:
     df = pd.merge(df_fact, df_dimStu[["StudentID", "GradeLevel"]], on="StudentID", how="left")
     df = pd.merge(df, df_dimSub[["SubjectID", "SubjectName"]], on="SubjectID", how="left")
 
-    # 构造时间标签 
+    # 构造 YearQuarterConcat 为 "2022-Q1" 格式
     df_dimCal["YearQuarterConcat"] = df_dimCal["Year"].astype(str) + "-Q" + df_dimCal["QuarterNumber"].astype(str)
     df_dimCal["YearMonthConcat"] = df_dimCal["Year"].astype(str) + "-" + df_dimCal["Month"].apply(lambda x: f"{x:02d}")
     df = pd.merge(df, df_dimCal[["DateKey", "YearQuarterConcat", "YearMonthConcat"]], on="DateKey", how="left")
@@ -37,17 +37,9 @@ try:
     perfect_target = 100
 
 except Exception as e:
-    print(f"Data Load Error (Using dummy data for demonstration): {e}")
-    # 提供假数据以防没有 Excel 文件时报错，方便调试
-    df = pd.DataFrame({
-        "Score": [80, 90, 60, 40, 100] * 20,
-        "GradeLevel": ["01", "02", "03", "04", "05"] * 20,
-        "SubjectName": ["Math", "English", "Science", "History", "Art"] * 20,
-        "Assessment_Grade": ["B", "A", "D", "F", "A"] * 20,
-        "YearQuarterConcat": ["2022-Q1", "2022-Q2", "2022-Q3", "2022-Q4", "2023-Q1"] * 20,
-        "PassedScore": ["Pass", "Pass", "Pass", "Fail", "Pass"] * 20
-    })
-
+    print(f"Data Load Error (Using dummy data): {e}")
+    # 假数据用于防止报错
+    df = pd.DataFrame()
 
 # ==================== 2. App Layout ====================
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
@@ -182,7 +174,7 @@ def manage_filters(n_clicks, sig_grade, sig_subj, sig_assess, sig_quarter,
     return curr_grade, curr_subj, curr_assess, curr_quarter
 
 
-# ==================== 4. 辅助函数：动态筛选 ====================
+# ==================== 4. 全局辅助筛选函数 ====================
 def filter_df(ignore_grade=False, ignore_subj=False, ignore_assess=False, ignore_quarter=False,
               _sel_grade="All", _sel_subj="All", _sel_assess="All", _sel_quarter="All"):
     d = df.copy()
@@ -233,7 +225,13 @@ def build_donut_assess(df_in, selected_val):
     color_map = {'A':'#2ecc71','B':'#3498db','C':'#f1c40f','D':'#e67e22','F':'#e74c3c'}
     init_value = [{"Assessment_Grade": selected_val}] if selected_val != "All" else None
     sel = alt.selection_point(name="sel_assess", fields=["Assessment_Grade"], value=init_value, on='click', empty='none')
-    color = alt.condition(sel, alt.Color("Assessment_Grade:N", scale=alt.Scale(domain=['A','B','C','D','F'], range=list(color_map.values())), legend=None), alt.value('#dddddd'))
+    color = alt.condition(
+        sel,
+        alt.Color("Assessment_Grade:N",
+                  scale=alt.Scale(domain=['A','B','C','D','F'], range=list(color_map.values())),
+                  legend=None),
+        alt.value('#dddddd')
+    )
     opacity = alt.condition(sel, alt.value(0.4), alt.value(0.9))
     donut = (
         alt.Chart(counts)
@@ -249,15 +247,35 @@ def build_donut_assess(df_in, selected_val):
     return donut.to_dict()
 
 
-def build_bar_subject(df_in, selected_val):
+def build_bar_subject(df_in, selected_val, global_mean=None):
     if df_in.empty:
         return {
             "$schema": "https://vega.github.io/schema/vega/v6.json",
-            "marks": [{"type": "text", "encode": {"update": {"text": {"value": "No Data"}, "x": {"value": 100}, "y": {"value": 100}}}}]
+            "marks": [{
+                "type": "text",
+                "encode": {
+                    "update": {
+                        "text": {"value": "No Data"},
+                        "x": {"value": 100},
+                        "y": {"value": 100}
+                    }
+                }
+            }]
         }
 
     df_agg = df_in.groupby("SubjectName")["Score"].mean().reset_index()
     df_agg.rename(columns={"Score": "Average of Score"}, inplace=True)
+
+    # 统一使用外部传入的全局均值（当前所有筛选条件下）
+    if global_mean is not None:
+        df_agg["MeanScore"] = global_mean
+    else:
+        df_agg["MeanScore"] = df_agg["Average of Score"].mean()
+
+    # 在 Python 里统一计算 YAxisBaseline
+    min_score = df_agg["Average of Score"].min()
+    df_agg["YAxisBaseline"] = min_score - 5
+
     data_values = df_agg.to_dict(orient="records")
     current_selection = selected_val if selected_val != "All" else None
 
@@ -280,46 +298,14 @@ def build_bar_subject(df_in, selected_val):
         },
         "style": "cell",
         "data": [
-            {"name": "dataset", "values": data_values},
-            {
-                "name": "data_0",
-                "source": "dataset",
-                "transform": [
-                    # 关键逻辑：在 Vega 内部计算 MeanScore 和 MinScore
-                    {
-                        "type": "joinaggregate",
-                        "as": ["MeanScore", "MinScore"],
-                        "ops": ["mean", "min"],
-                        "fields": ["Average of Score", "Average of Score"]
-                    },
-                    {
-                        "type": "formula",
-                        "expr": "datum.MinScore - 5",
-                        "as": "YAxisBaseline"
-                    }
-                ]
-            },
-            {
-                "name": "data_1",
-                "source": "data_0",
-                "transform": [{
-                    "type": "filter",
-                    "expr": "isValid(datum['Average of Score']) && isFinite(+datum['Average of Score'])"
-                }]
-            },
-            {
-                "name": "data_3",
-                "source": "data_0",
-                "transform": [{
-                    "type": "filter",
-                    "expr": "isValid(datum['MeanScore']) && isFinite(+datum['MeanScore'])"
-                }]
-            },
+            {"name": "data_1", "values": data_values},
+            {"name": "data_3", "source": "data_1"},
             {
                 "name": "data_4",
-                "source": "data_0",
+                "source": "data_1",
                 "transform": [
-                    {"type": "window", "as": ["rowNum"], "ops": ["row_number"], "fields": [None], "sort": {"field": [], "order": []}},
+                    {"type": "window", "as": ["rowNum"], "ops": ["row_number"], "fields": [None],
+                     "sort": {"field": [], "order": []}},
                     {"type": "filter", "expr": "datum.rowNum === 1"}
                 ]
             }
@@ -437,8 +423,10 @@ def build_bar_subject(df_in, selected_val):
             }
         ],
         "axes": [
-            {"scale": "y", "orient": "left", "grid": True, "gridColor": "#DAD8D7", "gridOpacity": 0.5, "title": "Avg Score", "zindex": 0},
-            {"scale": "x", "orient": "bottom", "labelAngle": 325, "labelAlign": "right", "zindex": 0}
+            {"scale": "y", "orient": "left", "grid": True, "gridColor": "#DAD8D7",
+             "gridOpacity": 0.5, "title": "Avg Score", "zindex": 0},
+            {"scale": "x", "orient": "bottom", "labelAngle": 325,
+             "labelAlign": "right", "zindex": 0}
         ],
         "config": {
             "axis": {"labelFontSize": 12, "titleFontSize": 14, "titlePadding": 10},
@@ -448,25 +436,43 @@ def build_bar_subject(df_in, selected_val):
     return vega_spec
 
 
-def build_bar_quarter(df_in, selected_quarter=None):
+def build_bar_quarter(df_in, selected_quarter=None, global_mean=None):
     if df_in.empty or 'YearQuarterConcat' not in df_in.columns:
         return {
             "$schema": "https://vega.github.io/schema/vega/v6.json",
-            "marks": [{"type": "text", "encode": {"update": {"text": {"value": "No Data"}, "x": {"value": 100}, "y": {"value": 100}}}}]
+            "marks": [{
+                "type": "text",
+                "encode": {
+                    "update": {
+                        "text": {"value": "No Data"},
+                        "x": {"value": 100},
+                        "y": {"value": 100}
+                    }
+                }
+            }]
         }
 
-    # ==================== Python 端逻辑修改 ====================
-    # 1. 仅计算 Quarter 的平均分，不再计算 global_mean
-    # 2. 保持数据结构简单，只包含 'YearQuarterConcat' 和 'Average of Score'
+    # Python 中计算季度平均
     agg_quarter = df_in.groupby('YearQuarterConcat')['Score'].mean().reset_index()
     agg_quarter.rename(columns={'Score': 'Average of Score'}, inplace=True)
-    
+
+    # 使用统一的全局均值
+    if global_mean is not None:
+        agg_quarter['MeanScore'] = global_mean
+    else:
+        agg_quarter['MeanScore'] = agg_quarter['Average of Score'].mean()
+
+    # 统一计算 MinScore / YAxisBaseline
+    min_score = agg_quarter['Average of Score'].min()
+    agg_quarter['MinScore'] = min_score
+    agg_quarter['YAxisBaseline'] = min_score - 5
+
     data_values = agg_quarter.to_dict(orient='records')
     current_selection = selected_quarter if selected_quarter != "All" else None
 
     vega_spec = {
         "$schema": "https://vega.github.io/schema/vega/v6.json",
-        "description": "Quarterly bar chart with Vega-calculated average line",
+        "description": "Bar chart with average line for Quarterly Scores",
         "background": "white",
         "padding": 10,
         "width": 650,
@@ -474,7 +480,7 @@ def build_bar_quarter(df_in, selected_quarter=None):
         "autosize": {"type": "fit", "contains": "padding"},
         "title": {
             "text": "Quarterly Performance",
-            "subtitle": ["Average Score per Quarter vs. Average of Quarterly Averages"],
+            "subtitle": ["Average Score per Quarter vs. Overall Average"],
             "anchor": "start",
             "fontSize": 16,
             "subtitleFontSize": 12,
@@ -483,38 +489,13 @@ def build_bar_quarter(df_in, selected_quarter=None):
         },
         "style": "cell",
         "data": [
-            {"name": "dataset", "values": data_values},
-
-            # ==================== Vega 端逻辑修改 ====================
-            # data_0: 仿照 Subject 图，在此处计算 MeanScore 和 MinScore
-            {
-                "name": "data_0",
-                "source": "dataset",
-                "transform": [
-                    {
-                        "type": "joinaggregate",
-                        "as": ["MeanScore", "MinScore"],
-                        "ops": ["mean", "min"],
-                        "fields": ["Average of Score", "Average of Score"]
-                    },
-                    {
-                        "type": "formula",
-                        "expr": "datum.MinScore - 5",
-                        "as": "YAxisBaseline"
-                    }
-                ]
-            },
-
-            # data_1: 处理数据有效性 + 拆分 Quarter/Year 标签
+            {"name": "data_0", "values": data_values},
             {
                 "name": "data_1",
                 "source": "data_0",
                 "transform": [
-                    {
-                        "type": "filter",
-                        "expr": "isValid(datum['Average of Score']) && isFinite(+datum['Average of Score'])"
-                    },
-                    # 拆分逻辑保持不变，用于 Timeline 轴
+                    {"type": "filter",
+                     "expr": "isValid(datum['Average of Score']) && isFinite(+datum['Average of Score'])"},
                     {
                         "type": "formula",
                         "as": "QuarterLabel",
@@ -527,40 +508,17 @@ def build_bar_quarter(df_in, selected_quarter=None):
                     }
                 ]
             },
-
-            # data_3: 用于画平均线 (依赖 Vega 计算出的 MeanScore)
-            {
-                "name": "data_3",
-                "source": "data_0",
-                "transform": [
-                    {
-                        "type": "filter",
-                        "expr": "isValid(datum['MeanScore']) && isFinite(+datum['MeanScore'])"
-                    }
-                ]
-            },
-
-            # data_4: 用于画平均线文字 (取第一行)
+            {"name": "data_3", "source": "data_0"},
             {
                 "name": "data_4",
                 "source": "data_0",
                 "transform": [
-                    {
-                        "type": "window",
-                        "as": ["rowNum"],
-                        "ops": ["row_number"],
-                        "fields": [None],
-                        "sort": {"field": [], "order": []}
-                    },
-                    {"type": "filter", "expr": "datum.rowNum === 1"},
-                    {
-                        "type": "filter",
-                        "expr": "isValid(datum['MeanScore']) && isFinite(+datum['MeanScore'])"
-                    }
+                    {"type": "window", "as": ["rowNum"], "ops": ["row_number"], "fields": [None],
+                     "sort": {"field": [], "order": []}},
+                    {"type": "filter", "expr": "datum.rowNum === 1"}
                 ]
             }
         ],
-
         "signals": [
             {
                 "name": "hovered_quarter",
@@ -574,15 +532,12 @@ def build_bar_quarter(df_in, selected_quarter=None):
                 "name": "sel_quarter",
                 "value": current_selection,
                 "on": [
-                    {
-                        "events": "@layer_0_marks:click",
-                        "update": "datum['YearQuarterConcat'] === sel_quarter ? null : datum['YearQuarterConcat']"
-                    },
+                    {"events": "@layer_0_marks:click",
+                     "update": "datum['YearQuarterConcat'] === sel_quarter ? null : datum['YearQuarterConcat']"},
                     {"events": "dblclick", "update": "null"}
                 ]
             }
         ],
-
         "marks": [
             # 柱子
             {
@@ -596,16 +551,12 @@ def build_bar_quarter(df_in, selected_quarter=None):
                         "cornerRadiusTopLeft": {"value": 10},
                         "cornerRadiusTopRight": {"value": 10},
                         "fill": [
-                            # 使用 Vega 计算的 MeanScore 进行颜色判断
                             {"test": "datum['Average of Score'] < datum.MeanScore", "value": "#EF8354"},
                             {"value": "#2D3142"}
                         ],
                         "fillOpacity": [
                             {"test": "hovered_quarter === datum['YearQuarterConcat']", "value": 1},
-                            {
-                                "test": "sel_quarter && datum['YearQuarterConcat'] !== sel_quarter",
-                                "value": 0.2
-                            },
+                            {"test": "sel_quarter && datum['YearQuarterConcat'] !== sel_quarter", "value": 0.2},
                             {"value": 0.8}
                         ],
                         "tooltip": {
@@ -614,12 +565,10 @@ def build_bar_quarter(df_in, selected_quarter=None):
                         "x": {"scale": "x", "field": "YearQuarterConcat", "band": 0.2},
                         "width": {"signal": "max(0.25, 0.6 * bandwidth('x'))"},
                         "y": {"scale": "y", "field": "Average of Score"},
-                        # 使用 Vega 计算的 YAxisBaseline
                         "y2": {"scale": "y", "field": "YAxisBaseline"}
                     }
                 }
             },
-
             # 平均线
             {
                 "name": "layer_2_marks",
@@ -636,7 +585,6 @@ def build_bar_quarter(df_in, selected_quarter=None):
                     }
                 }
             },
-
             # 平均线文字
             {
                 "name": "layer_3_marks",
@@ -657,9 +605,8 @@ def build_bar_quarter(df_in, selected_quarter=None):
                     }
                 }
             },
-
-            # --- Timeline 轴保持不变 ---
-            # 季度文字（上排）
+            # Timeline 轴（自定义绘制）
+            # 1. 季度文字（上排，如 Q1, Q2）
             {
                 "type": "text",
                 "from": {"data": "data_1"},
@@ -679,7 +626,7 @@ def build_bar_quarter(df_in, selected_quarter=None):
                     }
                 }
             },
-            # 年份文字（下排）
+            # 2. 年份文字（下排，仅在 Q1 显示）
             {
                 "type": "text",
                 "from": {"data": "data_1"},
@@ -700,7 +647,7 @@ def build_bar_quarter(df_in, selected_quarter=None):
                     }
                 }
             },
-            # 垂直分割线
+            # 3. 垂直分割线（年份之间的分隔）
             {
                 "type": "rule",
                 "from": {"data": "data_1"},
@@ -714,7 +661,7 @@ def build_bar_quarter(df_in, selected_quarter=None):
                     }
                 }
             },
-            # 底部横线
+            # 4. 底部横线（x轴线）
             {
                 "type": "rule",
                 "encode": {
@@ -728,7 +675,6 @@ def build_bar_quarter(df_in, selected_quarter=None):
                 }
             }
         ],
-
         "scales": [
             {
                 "name": "x",
@@ -749,8 +695,7 @@ def build_bar_quarter(df_in, selected_quarter=None):
                     "fields": [
                         {"data": "data_1", "field": "Average of Score"},
                         {"data": "data_1", "field": "YAxisBaseline"},
-                        {"data": "data_3", "field": "MeanScore"},
-                        {"data": "data_4", "field": "MeanScore"}
+                        {"data": "data_3", "field": "MeanScore"}
                     ]
                 },
                 "range": [{"signal": "height"}, 0],
@@ -758,7 +703,6 @@ def build_bar_quarter(df_in, selected_quarter=None):
                 "zero": False
             }
         ],
-
         "axes": [
             {
                 "scale": "y",
@@ -768,26 +712,22 @@ def build_bar_quarter(df_in, selected_quarter=None):
                 "gridOpacity": 0.5,
                 "tickCount": {"signal": "ceil(height/40)"},
                 "title": "Average Score",
-                "domain": False,
-                "ticks": False,
                 "zindex": 0
             },
             {
                 "scale": "x",
                 "orient": "bottom",
-                "grid": False,
-                "domain": False,
                 "labels": False,
+                "ticks": False,
+                "domain": False,
                 "zindex": 0
             }
         ],
-
         "config": {
             "axis": {"labelFontSize": 12, "titleFontSize": 14, "titlePadding": 10},
             "style": {"cell": {"stroke": "transparent"}}
         }
     }
-
     return vega_spec
 
 
@@ -821,11 +761,15 @@ def update_visuals(sel_grade, sel_subj, sel_assess, sel_quarter):
             d = d[d["YearQuarterConcat"] == sel_quarter]
         return d
 
+    # 所有 KPI 及“Overall Avg”都基于完整筛选条件
     df_kpi = local_filter_df()
     if df_kpi.empty:
         k_avg = k_w = k_pass = k_perf = "N/A"
+        global_mean = None
     else:
-        k_avg = f"{df_kpi['Score'].mean():.2f}"
+        global_mean_value = df_kpi['Score'].mean()
+        global_mean = global_mean_value
+        k_avg = f"{global_mean_value:.2f}"
         if "WeightedScore" in df_kpi.columns and "Weight" in df_kpi.columns:
             total_w = df_kpi["Weight"].sum()
             k_w = f"{df_kpi['WeightedScore'].sum() / total_w:.2f}" if total_w > 0 else k_avg
@@ -834,15 +778,16 @@ def update_visuals(sel_grade, sel_subj, sel_assess, sel_quarter):
         k_pass = f"{(df_kpi['PassedScore'] == 'Pass').mean() * 100:.1f}%"
         k_perf = f"{(df_kpi['Score'] == perfect_target).mean() * 100:.1f}%"
 
+    # 各图忽略自身维度，实现 cross filter 而不“自过滤掉自己”
     df_grade = local_filter_df(ignore_grade=True)
     df_assess = local_filter_df(ignore_assess=True)
     df_subject = local_filter_df(ignore_subj=True)
-    df_quarter = local_filter_df(ignore_quarter=True) 
+    df_quarter = local_filter_df(ignore_quarter=True)
 
     spec_grade = build_donut_grade(df_grade, sel_grade)
     spec_assess = build_donut_assess(df_assess, sel_assess)
-    spec_subject = build_bar_subject(df_subject, sel_subj)
-    spec_quarter = build_bar_quarter(df_quarter, sel_quarter)
+    spec_subject = build_bar_subject(df_subject, sel_subj, global_mean)
+    spec_quarter = build_bar_quarter(df_quarter, sel_quarter, global_mean)
 
     status_text = f"Filters: Grade='{sel_grade}' | Subject='{sel_subj}' | Assess='{sel_assess}' | Quarter='{sel_quarter}'"
     return k_avg, k_w, k_pass, k_perf, spec_grade, spec_assess, spec_subject, spec_quarter, status_text
